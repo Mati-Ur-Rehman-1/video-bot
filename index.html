@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Video Generator - Production</title>
+    <title>AI Video Generator</title>
     <style>
         * {
             margin: 0;
@@ -61,7 +61,6 @@
             background: #f8f9fa;
             padding: 30px;
             border-radius: 15px;
-            border: 2px dashed #dee2e6;
         }
 
         .output-section {
@@ -96,6 +95,15 @@
             outline: none;
             border-color: #667eea;
             box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        select {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            font-size: 16px;
+            background: white;
         }
 
         .btn {
@@ -214,6 +222,7 @@
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
             margin-top: 30px;
+            padding: 0 40px 40px;
         }
 
         .feature-card {
@@ -243,7 +252,7 @@
     <div class="container">
         <div class="header">
             <h1>🎥 AI Video Generator</h1>
-            <p>Create stunning videos with AI - Powered by Azure Sora</p>
+            <p>Create stunning videos with AI - Transform your ideas into reality</p>
         </div>
 
         <div class="main-content">
@@ -259,10 +268,9 @@
 
                 <div class="form-group">
                     <label for="videoModel">AI Model:</label>
-                    <select id="videoModel" class="btn" style="background: white; color: black; border: 2px solid #e9ecef;">
-                        <option value="sora-2025-05-02">Sora May 2025 (Latest)</option>
-                        <option value="sora">Sora Default</option>
-                        <option value="aoai-sora">Azure Sora</option>
+                    <select id="videoModel">
+                        <option value="sora-2025-05-02">Premium Model (Latest)</option>
+                        <option value="sora">Standard Model</option>
                     </select>
                 </div>
 
@@ -271,7 +279,7 @@
                 </button>
 
                 <button class="btn btn-secondary" onclick="checkSystemHealth()">
-                    🔧 System Health
+                    🔧 System Check
                 </button>
 
                 <div class="progress-container" id="progressContainer" style="display: none;">
@@ -299,11 +307,11 @@
 
                 <div id="videoContainer" class="video-preview" style="display: none;">
                     <h3>🎥 Your Generated Video</h3>
-                    <video id="videoPlayer" controls>
+                    <video id="videoPlayer" controls autoplay>
                         Your browser does not support the video tag.
                     </video>
                     <div class="download-section">
-                        <button class="btn btn-success" onclick="downloadVideo()" id="downloadBtn" style="display: none;">
+                        <button class="btn btn-success" onclick="downloadVideo()" id="downloadBtn">
                             📥 Download Video
                         </button>
                     </div>
@@ -330,12 +338,12 @@
             <div class="feature-card">
                 <div class="feature-icon">🌐</div>
                 <h3>Cloud Powered</h3>
-                <p>Powered by Azure AI</p>
+                <p>Powered by Advanced AI</p>
             </div>
         </div>
 
         <div class="footer">
-            <p>AI Video Generator v2.0 | Powered by Azure Sora | Deployed on Azure Web Apps</p>
+            <p>AI Video Generator v2.0 | Powered by Advanced AI Technology</p>
         </div>
     </div>
 
@@ -380,7 +388,7 @@
 
             generateBtn.disabled = true;
             generateBtn.innerHTML = '⏳ Generating...';
-            updateStatus('processing', 'Generating video...');
+            updateStatus('processing', 'Starting video generation...');
             
             document.getElementById('progressContainer').style.display = 'block';
             updateProgress(10);
@@ -443,11 +451,11 @@
                         document.getElementById('progressText').textContent = 
                             `Status: ${data.status} (${data.progress}%)`;
 
-                        if (data.status === 'succeeded' && data.downloadUrl) {
+                        if (data.status === 'succeeded' && data.videoUrl) {
                             // Video ready!
                             clearInterval(progressInterval);
-                            currentVideoUrl = data.downloadUrl;
-                            showVideoResult(data.downloadUrl);
+                            currentVideoUrl = data.videoUrl;
+                            showVideoResult(data.videoUrl);
                             
                         } else if (data.status === 'failed') {
                             clearInterval(progressInterval);
@@ -457,11 +465,13 @@
                             `, 'error');
                             updateStatus('error', 'Generation failed');
                         }
+                    } else {
+                        console.error('Status check failed:', data.error);
                     }
                 } catch (error) {
                     console.error('Progress check error:', error);
                 }
-            }, 10000); // Check every 10 seconds
+            }, 5000); // Check every 5 seconds
         }
 
         // Show video result
@@ -471,17 +481,20 @@
             
             showResult(`
                 <h3>🎉 Video Generated Successfully!</h3>
-                <p>Your AI-generated video is ready for download.</p>
+                <p>Your AI-generated video is ready to watch and download.</p>
             `, 'success');
 
             // Show video player
             const videoContainer = document.getElementById('videoContainer');
             const videoPlayer = document.getElementById('videoPlayer');
-            const downloadBtn = document.getElementById('downloadBtn');
             
-            videoPlayer.src = videoUrl;
+            // Use proxy if needed, otherwise use direct URL
+            const finalVideoUrl = videoUrl.includes('content?') 
+                ? `/proxy-video?url=${encodeURIComponent(videoUrl)}`
+                : videoUrl;
+                
+            videoPlayer.src = finalVideoUrl;
             videoContainer.style.display = 'block';
-            downloadBtn.style.display = 'block';
             
             // Auto-scroll to video
             videoContainer.scrollIntoView({ behavior: 'smooth' });
@@ -490,7 +503,13 @@
         // Download video
         function downloadVideo() {
             if (currentVideoUrl) {
-                window.open(currentVideoUrl, '_blank');
+                const link = document.createElement('a');
+                link.href = currentVideoUrl;
+                link.download = `ai-video-${currentJobId}.mp4`;
+                link.target = '_blank';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
             }
         }
 
@@ -509,7 +528,6 @@
                     <h3>🔧 System Health Check</h3>
                     <p><strong>Status:</strong> ${data.status}</p>
                     <p><strong>Video Generation:</strong> ${data.video_generation}</p>
-                    <p><strong>Storage:</strong> ${data.storage}</p>
                     <p><strong>Message:</strong> ${data.message}</p>
                 `, 'info');
                 
@@ -525,6 +543,4 @@
         document.getElementById('videoPrompt').focus();
     </script>
 </body>
-
 </html>
-
