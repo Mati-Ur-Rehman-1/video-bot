@@ -26,10 +26,13 @@ const __dirname = path.dirname(__filename);
 // Serve static files
 app.use(express.static(__dirname));
 
+// Store video data in memory
+const videoStore = new Map();
+
 // ✅ SIMPLIFIED VIDEO GENERATION
 app.post("/generate-video", async (req, res) => {
   try {
-    const { prompt, model = "sora-2025-05-02" } = req.body;
+    const { prompt, duration = "5", quality = "720" } = req.body;
     
     if (!prompt) {
       return res.json({
@@ -52,12 +55,16 @@ app.post("/generate-video", async (req, res) => {
     const apiVersion = process.env.AZURE_VIDEO_API_VERSION || 'preview';
     const videoEndpoint = `${baseEndpoint}/openai/v1/video/generations/jobs?api-version=${apiVersion}`;
 
+    // Calculate width based on quality
+    const width = quality === "1080" ? "1920" : quality === "720" ? "1280" : "854";
+    const height = quality === "1080" ? "1080" : quality === "720" ? "720" : "480";
+
     const requestBody = {
-      model: model,
+      model: "sora",
       prompt: prompt,
-      height: "720",
-      width: "1280",
-      n_seconds: "5",
+      height: height,
+      width: width,
+      n_seconds: duration.toString(),
       n_variants: "1"
     };
 
@@ -76,6 +83,9 @@ app.post("/generate-video", async (req, res) => {
 
     if (response.status === 201 || response.status === 202) {
       const jobId = responseData.id;
+      
+      // Start monitoring the video generation
+      monitorVideoGeneration(jobId);
       
       res.json({
         success: true,
@@ -98,7 +108,52 @@ app.post("/generate-video", async (req, res) => {
   }
 });
 
-// ✅ IMPROVED VIDEO STATUS CHECK WITH DIRECT URL
+// ✅ MONITOR VIDEO GENERATION IN BACKGROUND
+async function monitorVideoGeneration(jobId) {
+  console.log(`🔄 Starting background monitoring for job: ${jobId}`);
+  
+  const maxAttempts = 60; // 10 minutes
+  const checkInterval = 10000; // 10 seconds
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      console.log(`🔍 Monitoring attempt ${attempt}/${maxAttempts} for job: ${jobId}`);
+      
+      const status = await checkVideoStatus(jobId);
+      
+      if (status.success) {
+        if (status.status === 'succeeded') {
+          console.log(`✅ Video generation completed: ${jobId}`);
+          
+          // Store the generation ID for download
+          if (status.generations && status.generations.length > 0) {
+            const generationId = status.generations[0].id;
+            videoStore.set(jobId, {
+              generationId: generationId,
+              status: 'ready',
+              prompt: status.prompt
+            });
+            console.log(`🎬 Generation ID stored for job ${jobId}: ${generationId}`);
+          }
+          break;
+          
+        } else if (status.status === 'failed') {
+          console.log(`❌ Video generation failed: ${jobId}`);
+          videoStore.set(jobId, { status: 'failed' });
+          break;
+        }
+      }
+      
+      // Wait before next check
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+      
+    } catch (error) {
+      console.log(`⚠️ Monitoring attempt ${attempt} failed: ${error.message}`);
+    }
+  }
+}
+
+// ✅ IMPROVED VIDEO STATUS CHECK
 app.post("/check-video-status", async (req, res) => {
   try {
     const { jobId } = req.body;
@@ -109,21 +164,17 @@ app.post("/check-video-status", async (req, res) => {
     const status = await checkVideoStatus(jobId);
     
     if (status.success) {
-      let videoUrl = null;
-      
-      // If video is ready, get the direct video URL
-      if (status.status === 'succeeded' && status.generations && status.generations.length > 0) {
-        videoUrl = await getDirectVideoUrl(jobId, status.generations[0].id);
-      }
+      // Check if we have a stored video data
+      const videoData = videoStore.get(jobId);
+      const videoReady = videoData && videoData.status === 'ready';
       
       res.json({
         success: true,
         jobId: jobId,
         status: status.status,
         progress: getProgressFromStatus(status.status),
-        videoUrl: videoUrl,
-        videoReady: !!videoUrl,
-        message: getStatusMessage(status.status, !!videoUrl)
+        videoReady: videoReady,
+        message: getStatusMessage(status.status, videoReady)
       });
     } else {
       res.json({
@@ -140,50 +191,90 @@ app.post("/check-video-status", async (req, res) => {
   }
 });
 
-// ✅ GET DIRECT VIDEO URL (NO DOWNLOAD NEEDED)
-async function getDirectVideoUrl(jobId, generationId) {
+// ✅ DOWNLOAD VIDEO ENDPOINT - FIXED!
+app.get("/download-video", async (req, res) => {
   try {
+    const { jobId } = req.query;
+    
+    if (!jobId) {
+      return res.status(400).json({ error: "Job ID is required" });
+    }
+
+    console.log(`📥 Download request for job: ${jobId}`);
+
+    // Get video data from store
+    const videoData = videoStore.get(jobId);
+    
+    if (!videoData || videoData.status !== 'ready') {
+      return res.status(404).json({ error: "Video not ready or not found" });
+    }
+
     const baseEndpoint = process.env.AZURE_VIDEO_ENDPOINT.replace(/\/$/, '');
     const apiVersion = process.env.AZURE_VIDEO_API_VERSION || 'preview';
     
-    // Get the video data which should include a URL
-    const statusEndpoint = `${baseEndpoint}/openai/v1/video/generations/jobs/${jobId}?api-version=${apiVersion}`;
+    // Use the correct download endpoint from your Python code
+    const downloadUrl = `${baseEndpoint}/openai/v1/video/generations/${videoData.generationId}/content/video?api-version=${apiVersion}`;
     
-    const response = await fetch(statusEndpoint, {
-      headers: { "Api-key": process.env.AZURE_VIDEO_KEY },
+    console.log(`🔗 Downloading from: ${downloadUrl}`);
+
+    const response = await fetch(downloadUrl, {
+      headers: { 
+        "Api-key": process.env.AZURE_VIDEO_KEY,
+      },
     });
 
-    if (response.ok) {
-      const data = await response.json();
-      
-      // Try to extract video URL from different possible locations
-      if (data.generations && data.generations.length > 0) {
-        const generation = data.generations[0];
-        
-        // Check various possible URL locations
-        if (generation.url) {
-          console.log(`✅ Found direct video URL: ${generation.url}`);
-          return generation.url;
-        }
-        
-        if (generation.data && generation.data.url) {
-          console.log(`✅ Found video URL in data: ${generation.data.url}`);
-          return generation.data.url;
-        }
-        
-        // If no URL found, construct a direct download URL
-        const directUrl = `${baseEndpoint}/openai/v1/video/generations/${generationId}/content?api-version=${apiVersion}`;
-        console.log(`🔗 Using constructed URL: ${directUrl}`);
-        return directUrl;
-      }
+    if (!response.ok) {
+      throw new Error(`Download failed with status: ${response.status}`);
     }
+
+    // Get the video buffer
+    const videoBuffer = Buffer.from(await response.arrayBuffer());
     
-    return null;
+    // Set download headers
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Content-Disposition', `attachment; filename="ai-video-${jobId}.mp4"`);
+    res.setHeader('Content-Length', videoBuffer.length);
+    res.setHeader('Cache-Control', 'no-cache');
+    
+    console.log(`✅ Download successful, sending ${videoBuffer.length} bytes`);
+    
+    // Send the video
+    res.send(videoBuffer);
+
   } catch (error) {
-    console.error(`❌ URL extraction error: ${error.message}`);
-    return null;
+    console.error("❌ Download error:", error);
+    res.status(500).json({ error: "Download failed: " + error.message });
   }
-}
+});
+
+// ✅ GET VIDEO INFO ENDPOINT
+app.get("/get-video-info", (req, res) => {
+  try {
+    const { jobId } = req.query;
+    
+    if (!jobId) {
+      return res.status(400).json({ error: "Job ID is required" });
+    }
+
+    const videoData = videoStore.get(jobId);
+    
+    if (!videoData) {
+      return res.status(404).json({ error: "Video data not found" });
+    }
+
+    res.json({
+      success: true,
+      jobId: jobId,
+      status: videoData.status,
+      generationId: videoData.generationId,
+      prompt: videoData.prompt
+    });
+    
+  } catch (error) {
+    console.error("❌ Get video info error:", error);
+    res.status(500).json({ error: "Failed to get video info" });
+  }
+});
 
 // ✅ CHECK VIDEO STATUS FUNCTION
 async function checkVideoStatus(jobId) {
@@ -216,45 +307,14 @@ async function checkVideoStatus(jobId) {
   }
 }
 
-// ✅ PROXY ENDPOINT FOR VIDEO STREAMING (if needed)
-app.get("/proxy-video", async (req, res) => {
-  try {
-    const { url } = req.query;
-    
-    if (!url) {
-      return res.status(400).json({ error: "URL parameter required" });
-    }
-
-    const response = await fetch(url, {
-      headers: {
-        "Api-key": process.env.AZURE_VIDEO_KEY,
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Proxy fetch failed: ${response.status}`);
-    }
-
-    // Set appropriate headers for video streaming
-    res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    
-    // Pipe the video stream to response
-    response.body.pipe(res);
-    
-  } catch (error) {
-    console.error("❌ Video proxy error:", error);
-    res.status(500).json({ error: "Video streaming failed" });
-  }
-});
-
 // ✅ HEALTH CHECK ENDPOINT
 app.get("/health", (req, res) => {
   res.json({
     status: "healthy",
     video_generation: "enabled", 
     message: "AI Video Generator - Production Ready",
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    active_jobs: videoStore.size
   });
 });
 
@@ -282,7 +342,7 @@ function getStatusMessage(status, videoReady = false) {
     'queued': 'Video is in queue...',
     'running': 'Video is being generated...',
     'processing': 'Video is processing...',
-    'succeeded': videoReady ? 'Video ready!' : 'Finalizing video...',
+    'succeeded': videoReady ? 'Video ready for download!' : 'Finalizing video...',
     'failed': 'Video generation failed'
   };
   return messages[status] || `Status: ${status}`;
